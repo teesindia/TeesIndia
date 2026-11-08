@@ -1,14 +1,9 @@
+import { sendServerError } from '../lib/server-error';
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, requireAdmin, AuthRequest } from '../middlewares/auth.middleware';
 
 const router = Router();
-
-// ─── Helper: normalise Prisma / unknown errors to a string ────────────────────
-function errMsg(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
 
 // GET /api/categories
 router.get('/', async (_req: Request, res: Response): Promise<void> => {
@@ -23,7 +18,7 @@ router.get('/', async (_req: Request, res: Response): Promise<void> => {
     });
     res.json({ categories });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch categories', error: errMsg(err) });
+    sendServerError(res, 'category.routes', err, 'Failed to fetch categories');
   }
 });
 
@@ -43,7 +38,7 @@ router.get('/:id', authenticate, requireAdmin, async (req: Request, res: Respons
     }
     res.json({ category });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch category', error: errMsg(err) });
+    sendServerError(res, 'category.routes', err, 'Failed to fetch category');
   }
 });
 
@@ -68,7 +63,7 @@ router.post('/', authenticate, requireAdmin, async (req: AuthRequest, res: Respo
     });
     res.status(201).json({ category });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to create category', error: errMsg(err) });
+    sendServerError(res, 'category.routes', err, 'Failed to create category');
   }
 });
 
@@ -104,7 +99,7 @@ router.put('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: Res
     const category = await prisma.category.update({ where: { id }, data });
     res.json({ category });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to update category', error: errMsg(err) });
+    sendServerError(res, 'category.routes', err, 'Failed to update category');
   }
 });
 
@@ -144,7 +139,7 @@ router.delete('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: 
     await prisma.category.delete({ where: { id } });
     res.json({ message: 'Category deleted successfully' });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to delete category', error: errMsg(err) });
+    sendServerError(res, 'category.routes', err, 'Failed to delete category');
   }
 });
 

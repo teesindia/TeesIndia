@@ -1,3 +1,4 @@
+import { sendServerError } from '../lib/server-error';
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, requireAdmin, AuthRequest } from '../middlewares/auth.middleware';
@@ -40,7 +41,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
     ]);
     res.json({ posts, total });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch posts', error: err });
+    sendServerError(res, 'blog.routes', err, 'Failed to fetch posts');
   }
 });
 
@@ -54,7 +55,7 @@ router.get('/:slug', async (req: Request, res: Response): Promise<void> => {
     if (!post || (!post.isPublished)) { res.status(404).json({ message: 'Post not found' }); return; }
     res.json({ post });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch post', error: err });
+    sendServerError(res, 'blog.routes', err, 'Failed to fetch post');
   }
 });
 
@@ -74,7 +75,7 @@ router.post('/', authenticate, requireAdmin, async (req: AuthRequest, res: Respo
     res.status(201).json({ post });
     revalidateFrontend('blog').catch(() => {});
   } catch (err) {
-    res.status(500).json({ message: 'Failed to create post', error: err });
+    sendServerError(res, 'blog.routes', err, 'Failed to create post');
   }
 });
 
@@ -95,7 +96,7 @@ router.put('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: Res
     res.json({ post });
     revalidateFrontend('blog').catch(() => {});
   } catch (err) {
-    res.status(500).json({ message: 'Failed to update post', error: err });
+    sendServerError(res, 'blog.routes', err, 'Failed to update post');
   }
 });
 
@@ -106,7 +107,7 @@ router.delete('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: 
     res.json({ message: 'Post deleted' });
     revalidateFrontend('blog').catch(() => {});
   } catch (err) {
-    res.status(500).json({ message: 'Failed to delete post', error: err });
+    sendServerError(res, 'blog.routes', err, 'Failed to delete post');
   }
 });
 

@@ -1,9 +1,11 @@
+import { sendServerError } from '../lib/server-error';
+import { rupeesToPaise } from '../lib/money';
 import { Router, Request, Response } from 'express';
 import { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { authenticate, requireAdmin } from '../middlewares/auth.middleware';
 import multer from 'multer';
-import { uploadToDrive, isDriveConfigured } from '../lib/drive';
+import { uploadObject, isObjectStorageConfigured } from '../lib/objectStorage';
 
 // ── Multer for settings image uploads (logo, hero, OG image) ──────────────────
 // Always use memory storage so the buffer is available for Drive upload OR
@@ -14,12 +16,9 @@ const upload = multer({
 });
 
 async function resolveUploadUrl(file: Express.Multer.File): Promise<string> {
-  if (isDriveConfigured()) {
-    const result = await uploadToDrive(file.buffer, file.originalname, file.mimetype);
-    return result.webContentLink;
-  }
-  // Embed as base64 data URL so the image lives in the DB (survives redeploys)
-  return `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+  if (!isObjectStorageConfigured()) throw new Error('R2 file storage is not configured');
+  const result = await uploadObject(file.buffer, file.originalname, file.mimetype);
+  return result.url;
 }
 
 const router = Router();
@@ -104,7 +103,9 @@ async function syncCustomizerProducts(
           slug,
           description: `${productName} featuring the ${phrase} design.`,
           price: productPrice,
+          pricePaise: rupeesToPaise(productPrice),
           comparePrice: Math.round(productPrice * 1.25),
+          comparePricePaise: rupeesToPaise(Math.round(productPrice * 1.25)),
           categoryId: category.id,
           stock: 99,
           isFeatured: false,
@@ -123,7 +124,9 @@ async function syncCustomizerProducts(
           name: productName,
           description: `${productName} featuring the ${phrase} design.`,
           price: productPrice,
+          pricePaise: rupeesToPaise(productPrice),
           comparePrice: Math.round(productPrice * 1.25),
+          comparePricePaise: rupeesToPaise(Math.round(productPrice * 1.25)),
           categoryId: category.id,
           stock: 99,
           isActive: true,
@@ -391,6 +394,13 @@ export const DEFAULT_STORE_SETTINGS = {
   productSort: 'newest' as const,
 };
 
+function parseStoredSettings(value: unknown): Record<string, any> {
+  if (typeof value === 'string') {
+    try { return JSON.parse(value); } catch { return {}; }
+  }
+  return value && typeof value === 'object' ? value as Record<string, any> : {};
+}
+
 // ─── Merge helper: preserve default arrays when saved data has empty/missing arrays ─
 function mergeSettings(saved: Record<string, any>): typeof DEFAULT_STORE_SETTINGS {
   const merged: any = { ...DEFAULT_STORE_SETTINGS, ...saved };
@@ -411,14 +421,14 @@ function mergeSettings(saved: Record<string, any>): typeof DEFAULT_STORE_SETTING
 router.get('/', async (_req: Request, res: Response): Promise<void> => {
   try {
     const row = await prisma.storeSettings.findUnique({ where: { id: 'singleton' } });
-    const settings = row ? mergeSettings(row.data as Record<string, any>) : DEFAULT_STORE_SETTINGS;
+    const settings = row ? mergeSettings(parseStoredSettings(row.data)) : DEFAULT_STORE_SETTINGS;
     // Keep the origin-reflecting CORS response out of shared CDN caches.
     res.set('Cache-Control', 'private, max-age=60');
     res.json({ settings });
   } catch (err) {
     console.error('Failed to fetch store settings:', err);
     res.set('Cache-Control', 'no-store');
-    res.status(500).json({ message: 'Failed to fetch store settings' });
+    sendServerError(res, 'settings.routes', err, 'Failed to fetch store settings');
   }
 });
 
@@ -426,10 +436,10 @@ router.get('/', async (_req: Request, res: Response): Promise<void> => {
 router.get('/admin', authenticate, requireAdmin, async (_req: Request, res: Response): Promise<void> => {
   try {
     const row = await prisma.storeSettings.findUnique({ where: { id: 'singleton' } });
-    const settings = row ? mergeSettings(row.data as Record<string, any>) : DEFAULT_STORE_SETTINGS;
+    const settings = row ? mergeSettings(parseStoredSettings(row.data)) : DEFAULT_STORE_SETTINGS;
     res.json({ settings });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch settings', error: err });
+    sendServerError(res, 'settings.routes', err, 'Failed to fetch settings');
   }
 });
 
@@ -440,8 +450,8 @@ router.put('/admin', authenticate, requireAdmin, async (req: Request, res: Respo
     const row = await prisma.$transaction(async tx => {
       const savedSettings = await tx.storeSettings.upsert({
         where: { id: 'singleton' },
-        create: { id: 'singleton', data: newData },
-        update: { data: newData },
+        create: { id: 'singleton', data: JSON.stringify(newData) },
+        update: { data: JSON.stringify(newData) },
       });
       await syncCustomizerProducts(tx, newData as Record<string, any>);
       return savedSettings;
@@ -450,9 +460,9 @@ router.put('/admin', authenticate, requireAdmin, async (req: Request, res: Respo
     // Non-blocking: we don't await so the admin gets a fast response.
     revalidateFrontend('settings').catch(() => {});
     revalidateFrontend('products').catch(() => {});
-    res.json({ message: 'Settings saved successfully', settings: row.data });
+    res.json({ message: 'Settings saved successfully', settings: parseStoredSettings(row.data) });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to save settings', error: err });
+    sendServerError(res, 'settings.routes', err, 'Failed to save settings');
   }
 });
 
@@ -466,22 +476,27 @@ router.post('/upload', authenticate, requireAdmin, upload.single('file'), async 
     const url = await resolveUploadUrl(req.file);
     res.json({ url });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to upload image', error: err });
+    sendServerError(res, 'settings.routes', err, 'Failed to upload image');
   }
 });
 
-// ─── ADMIN: POST /api/settings/verify-smtp — check SMTP connection ───────────
+// ─── ADMIN: POST /api/settings/verify-smtp — verify transactional email API ──
 router.post('/verify-smtp', authenticate, requireAdmin, async (_req: Request, res: Response): Promise<void> => {
   try {
     const { verifySMTP } = await import('../lib/mailer');
     const result = await verifySMTP();
     if (!result.success) {
-      res.status(400).json(result);
+      res.status(400).json({
+        success: false,
+        message: process.env.NODE_ENV === 'development'
+          ? result.message
+          : 'Email configuration could not be verified.',
+      });
       return;
     }
     res.json(result);
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err?.message || 'SMTP check failed' });
+      sendServerError(res, 'settings.routes', err, 'Request failed');
   }
 });
 
@@ -496,18 +511,18 @@ router.post('/test-email', authenticate, requireAdmin, async (req: Request, res:
     const { sendMail } = await import('../lib/mailer');
     await sendMail({
       to,
-      subject: 'TEESINDIA™ — SMTP Test Email',
+      subject: 'TEESINDIA™ — Test Email',
       html: `
         <div style="font-family:sans-serif;padding:24px;background:#0d0d0d;color:#ffffff;border-radius:8px;">
-          <h2 style="color:#C9A96E;margin-top:0;">SMTP Configuration Successful</h2>
-          <p>Your Gmail SMTP connection for TEESINDIA™ is active and operational.</p>
+          <h2 style="color:#C9A96E;margin-top:0;">Email Configuration Successful</h2>
+          <p>Your transactional email API for TEESINDIA™ is active and operational.</p>
           <p style="color:#888;font-size:12px;">Sent at: ${new Date().toLocaleString('en-IN')}</p>
         </div>
       `,
     });
     res.json({ success: true, message: `Test email dispatched to ${to}` });
   } catch (err: any) {
-    res.status(500).json({ success: false, message: err?.message || 'Failed to send test email' });
+    sendServerError(res, 'settings.routes', err, 'Request failed');
   }
 });
 

@@ -1,3 +1,4 @@
+import { sendServerError } from '../lib/server-error';
 import { Router, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, AuthRequest } from '../middlewares/auth.middleware';
@@ -30,7 +31,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     });
     res.json({ cartItems });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch cart', error: err });
+    sendServerError(res, 'cart.routes', err, 'Failed to fetch cart');
   }
 });
 
@@ -85,7 +86,7 @@ router.post('/add', async (req: AuthRequest, res: Response): Promise<void> => {
       res.status(201).json({ cartItem: created });
     }
   } catch (err) {
-    res.status(500).json({ message: 'Failed to add to cart', error: err });
+    sendServerError(res, 'cart.routes', err, 'Failed to add to cart');
   }
 });
 
@@ -105,7 +106,7 @@ router.put('/update', async (req: AuthRequest, res: Response): Promise<void> => 
     });
     res.json({ cartItem: updated });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to update cart', error: err });
+    sendServerError(res, 'cart.routes', err, 'Failed to update cart');
   }
 });
 
@@ -116,7 +117,7 @@ router.delete('/remove', async (req: AuthRequest, res: Response): Promise<void> 
     await prisma.cartItem.delete({ where: { id: cartItemId } });
     res.json({ message: 'Item removed from cart' });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to remove item', error: err });
+    sendServerError(res, 'cart.routes', err, 'Failed to remove item');
   }
 });
 
@@ -126,7 +127,7 @@ router.delete('/clear', async (req: AuthRequest, res: Response): Promise<void> =
     await prisma.cartItem.deleteMany({ where: { userId: req.user!.id } });
     res.json({ message: 'Cart cleared' });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to clear cart', error: err });
+    sendServerError(res, 'cart.routes', err, 'Failed to clear cart');
   }
 });
 

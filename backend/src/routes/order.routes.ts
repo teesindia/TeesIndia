@@ -1,6 +1,9 @@
+import { sendServerError } from '../lib/server-error';
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, requireAdmin, AuthRequest } from '../middlewares/auth.middleware';
+import { OutOfStockError, reserveInventory, restoreInventory } from '../lib/inventory';
+import { paiseToRupees } from '../lib/money';
 
 const router = Router();
 
@@ -9,8 +12,22 @@ router.post('/', authenticate, async (req: AuthRequest, res: Response): Promise<
   try {
     const { addressId, paymentMethod, items, notes } = req.body;
 
+    if (paymentMethod !== 'COD') {
+      res.status(400).json({ message: 'Use /api/payment/checkout for online payments' });
+      return;
+    }
+    if (!Array.isArray(items) || items.length === 0 || items.some((item: any) => !Number.isInteger(item.quantity) || item.quantity < 1)) {
+      res.status(400).json({ message: 'Provide items with positive whole-number quantities' });
+      return;
+    }
+    const address = await prisma.address.findFirst({ where: { id: addressId, userId: req.user!.id } });
+    if (!address) {
+      res.status(400).json({ message: 'Choose a valid shipping address' });
+      return;
+    }
+
     // Calculate total
-    let totalAmount = 0;
+    let totalAmountPaise = 0;
     const orderItems = [];
 
     for (const item of items) {
@@ -19,29 +36,47 @@ router.post('/', authenticate, async (req: AuthRequest, res: Response): Promise<
         res.status(400).json({ message: `Product "${product?.name || item.productId}" is no longer available` });
         return;
       }
-      const price = Number(product.price);
-      totalAmount += price * item.quantity;
-      orderItems.push({ productId: item.productId, variantId: item.variantId || null, quantity: item.quantity, price, size: item.size });
+      const pricePaise = product.pricePaise;
+      const price = paiseToRupees(pricePaise);
+      totalAmountPaise += pricePaise * item.quantity;
+      orderItems.push({ productId: item.productId, variantId: item.variantId || null, quantity: item.quantity, price, pricePaise, size: item.size });
     }
 
     const order = await prisma.order.create({
       data: {
         userId: req.user!.id,
         addressId,
-        totalAmount,
+        totalAmount: paiseToRupees(totalAmountPaise),
+        totalAmountPaise,
         paymentMethod,
+        status: 'CONFIRMED',
         notes,
         items: { create: orderItems },
       },
       include: { items: { include: { product: { include: { images: { take: 1 } } } } }, address: true },
     });
 
+    try {
+      await reserveInventory(order.items.map(item => ({
+        productId: item.productId,
+        variantId: item.variantId,
+        quantity: item.quantity,
+      })));
+    } catch (error) {
+      await prisma.order.delete({ where: { id: order.id } });
+      if (error instanceof OutOfStockError) {
+        res.status(409).json({ message: error.message });
+        return;
+      }
+      throw error;
+    }
+
     // Clear cart after order
     await prisma.cartItem.deleteMany({ where: { userId: req.user!.id } });
 
     res.status(201).json({ order });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to create order', error: err });
+    sendServerError(res, 'order.routes', err, 'Failed to create order');
   }
 });
 
@@ -55,7 +90,7 @@ router.get('/', authenticate, async (req: AuthRequest, res: Response): Promise<v
     });
     res.json({ orders });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch orders', error: err });
+    sendServerError(res, 'order.routes', err, 'Failed to fetch orders');
   }
 });
 
@@ -80,7 +115,7 @@ router.get('/:id/public', async (req: Request, res: Response): Promise<void> => 
     if (!order) { res.status(404).json({ message: 'Order not found' }); return; }
     res.json({ order });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch order', error: err });
+    sendServerError(res, 'order.routes', err, 'Failed to fetch order');
   }
 });
 
@@ -109,21 +144,48 @@ router.get('/:id', authenticate, async (req: AuthRequest, res: Response): Promis
     if (!order) { res.status(404).json({ message: 'Order not found' }); return; }
     res.json({ order });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch order', error: err });
+    sendServerError(res, 'order.routes', err, 'Failed to fetch order');
   }
 });
 
 // PUT /api/orders/:id/status (admin)
 router.put('/:id/status', authenticate, requireAdmin, async (req: Request, res: Response): Promise<void> => {
   try {
-    const { status, paymentStatus } = req.body;
-    const order = await prisma.order.update({
-      where: { id: String(req.params.id) },
-      data: { status, paymentStatus },
+    const { status } = req.body;
+    if (typeof status !== 'string' || !status.trim()) {
+      res.status(400).json({ message: 'A valid order status is required' });
+      return;
+    }
+    const id = String(req.params.id);
+    const current = await prisma.order.findUnique({ where: { id }, include: { items: true } });
+    if (!current) {
+      res.status(404).json({ message: 'Order not found' });
+      return;
+    }
+    const updated = await prisma.order.updateMany({
+      where: { id, status: current.status },
+      data: {
+        status,
+        ...(status === 'CANCELLED' && current.paymentMethod === 'RAZORPAY' && current.paymentStatus === 'PENDING'
+          ? { paymentStatus: 'FAILED' }
+          : {}),
+      },
     });
+    if (updated.count === 0) {
+      res.status(409).json({ message: 'Order changed while you were updating it. Refresh and try again.' });
+      return;
+    }
+    if (status === 'CANCELLED' && current.status !== 'CANCELLED' && current.paymentStatus === 'PENDING') {
+      await restoreInventory(current.items.map(item => ({
+        productId: item.productId,
+        variantId: item.variantId,
+        quantity: item.quantity,
+      })));
+    }
+    const order = await prisma.order.findUnique({ where: { id }, include: { items: true } });
     res.json({ order });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to update order status', error: err });
+    sendServerError(res, 'order.routes', err, 'Failed to update order status');
   }
 });
 
@@ -147,7 +209,7 @@ router.get('/admin/all', authenticate, requireAdmin, async (req: Request, res: R
     ]);
     res.json({ orders, total });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch orders', error: err });
+    sendServerError(res, 'order.routes', err, 'Failed to fetch orders');
   }
 });
 

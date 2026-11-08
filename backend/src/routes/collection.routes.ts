@@ -1,3 +1,4 @@
+import { sendServerError } from '../lib/server-error';
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, requireAdmin } from '../middlewares/auth.middleware';
@@ -38,7 +39,7 @@ router.get('/', async (_req: Request, res: Response): Promise<void> => {
     });
     res.json({ collections });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch collections', error: err });
+    sendServerError(res, 'collection.routes', err, 'Failed to fetch collections');
   }
 });
 
@@ -51,7 +52,7 @@ router.get('/admin', authenticate, requireAdmin, async (_req: Request, res: Resp
     });
     res.json({ collections });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch collections', error: err });
+    sendServerError(res, 'collection.routes', err, 'Failed to fetch collections');
   }
 });
 
@@ -76,7 +77,7 @@ router.get('/:slug', async (req: Request, res: Response): Promise<void> => {
     if (!collection) { res.status(404).json({ message: 'Collection not found' }); return; }
     res.json({ collection });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch collection', error: err });
+    sendServerError(res, 'collection.routes', err, 'Failed to fetch collection');
   }
 });
 
@@ -90,7 +91,7 @@ router.post('/', authenticate, requireAdmin, async (req: Request, res: Response)
     res.status(201).json({ collection });
     revalidateFrontend('collections').catch(() => {});
   } catch (err) {
-    res.status(500).json({ message: 'Failed to create collection', error: err });
+    sendServerError(res, 'collection.routes', err, 'Failed to create collection');
   }
 });
 
@@ -109,7 +110,7 @@ router.put('/:id', authenticate, requireAdmin, async (req: Request, res: Respons
     res.json({ collection });
     revalidateFrontend('collections').catch(() => {});
   } catch (err) {
-    res.status(500).json({ message: 'Failed to update collection', error: err });
+    sendServerError(res, 'collection.routes', err, 'Failed to update collection');
   }
 });
 
@@ -120,7 +121,7 @@ router.delete('/:id', authenticate, requireAdmin, async (req: Request, res: Resp
     res.json({ message: 'Collection deleted' });
     revalidateFrontend('collections').catch(() => {});
   } catch (err) {
-    res.status(500).json({ message: 'Failed to delete collection', error: err });
+    sendServerError(res, 'collection.routes', err, 'Failed to delete collection');
   }
 });
 
@@ -133,7 +134,7 @@ router.post('/:id/products', authenticate, requireAdmin, async (req: Request, re
     });
     res.status(201).json({ message: 'Product added to collection' });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to add product', error: err });
+    sendServerError(res, 'collection.routes', err, 'Failed to add product');
   }
 });
 
@@ -150,7 +151,7 @@ router.delete('/:id/products/:productId', authenticate, requireAdmin, async (req
     });
     res.json({ message: 'Product removed from collection' });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to remove product', error: err });
+    sendServerError(res, 'collection.routes', err, 'Failed to remove product');
   }
 });
 

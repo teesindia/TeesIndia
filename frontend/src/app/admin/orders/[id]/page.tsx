@@ -370,7 +370,6 @@ export default function AdminOrderDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [status, setStatus] = useState("PENDING");
-  const [paymentStatus, setPaymentStatus] = useState("PENDING");
   const [showPreview, setShowPreview] = useState(false);
   const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
   const [showDispatchCustomizer, setShowDispatchCustomizer] = useState(false);
@@ -387,7 +386,6 @@ export default function AdminOrderDetailPage() {
       }
       setOrder(o);
       setStatus(o.status || "PENDING");
-      setPaymentStatus(o.paymentStatus || "PENDING");
     } catch (err) {
       console.error(err);
       toast.error("Failed to load order details");
@@ -403,7 +401,7 @@ export default function AdminOrderDetailPage() {
   const handleSaveStatus = async () => {
     setIsSaving(true);
     try {
-      await adminApi.updateOrderStatus(orderId, { status, paymentStatus });
+      await adminApi.updateOrderStatus(orderId, { status });
       toast.success("Order status updated successfully");
       fetchOrder();
     } catch (err) {
@@ -850,25 +848,9 @@ export default function AdminOrderDetailPage() {
                 <label style={{ display: "block", fontSize: "0.8rem", color: "#4b5563", marginBottom: "0.35rem" }}>
                   Payment Status
                 </label>
-                <select
-                  value={paymentStatus}
-                  onChange={(e) => setPaymentStatus(e.target.value)}
-                  style={{
-                    width: "100%",
-                    background: "#ffffff",
-                    border: "1px solid #d1d5db",
-                    borderRadius: "6px",
-                    padding: "0.6rem 0.85rem",
-                    color: "#111827",
-                    fontSize: "0.85rem",
-                    fontWeight: 600,
-                  }}
-                >
-                  <option value="PENDING">PENDING</option>
-                  <option value="PAID">PAID</option>
-                  <option value="FAILED">FAILED</option>
-                  <option value="REFUNDED">REFUNDED</option>
-                </select>
+                <div style={{ padding: "0.6rem 0.85rem", color: "#4b5563", fontSize: "0.85rem", fontWeight: 600 }}>
+                  {order?.paymentStatus || "PENDING"} · updated by verified payment events
+                </div>
               </div>
 
               <button

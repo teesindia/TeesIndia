@@ -1,7 +1,9 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api',
+  // Send browser requests through Next.js rewrites so the API remains same-origin
+  // and auth cookies work without cross-origin browser/CORS differences.
+  baseURL: '/api',
   withCredentials: true,
 });
 
@@ -37,7 +39,7 @@ api.interceptors.response.use(
       original._retry = true;
       try {
         await axios.post(
-          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api'}/auth/refresh`,
+          '/api/auth/refresh',
           {},
           { withCredentials: true }
         );

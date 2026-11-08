@@ -1,18 +1,54 @@
+import { sendServerError } from '../lib/server-error';
+import { paiseToRupees, rupeesToPaise } from '../lib/money';
 import { Router, Request, Response } from 'express';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import prisma from '../lib/prisma';
+import { reserveInventory, restoreInventory } from '../lib/inventory';
 import { authenticate, AuthRequest } from '../middlewares/auth.middleware';
 import { sendOrderConfirmation } from '../emails/orderConfirmation';
 
 const router = Router();
 
-const razorpay = new Razorpay({
-  key_id:     process.env.RAZORPAY_KEY_ID!,
-  key_secret: process.env.RAZORPAY_KEY_SECRET!,
-});
+const razorpayCredentialsConfigured = Boolean(
+  process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET,
+);
+const razorpay = razorpayCredentialsConfigured
+  ? new Razorpay({
+      key_id: process.env.RAZORPAY_KEY_ID!,
+      key_secret: process.env.RAZORPAY_KEY_SECRET!,
+    })
+  : null;
+
+async function refundLateCapturedPayment(orderId: string, paymentId: string, amount: number): Promise<'refunded' | 'processing' | 'required'> {
+  const claim = await prisma.order.updateMany({
+    where: { id: orderId, paymentStatus: 'FAILED', status: 'CANCELLED' },
+    data: { paymentStatus: 'REFUND_PROCESSING', razorpayPayId: paymentId },
+  });
+  if (claim.count === 0) {
+    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    if (order?.paymentStatus === 'REFUNDED') return 'refunded';
+    if (order?.paymentStatus === 'REFUND_PROCESSING') return 'processing';
+    return 'required';
+  }
+
+  if (!razorpay) {
+    await prisma.order.update({ where: { id: orderId }, data: { paymentStatus: 'REFUND_REQUIRED' } });
+    return 'required';
+  }
+
+  try {
+    await razorpay.payments.refund(paymentId, { amount });
+    await prisma.order.update({ where: { id: orderId }, data: { paymentStatus: 'REFUNDED' } });
+    return 'refunded';
+  } catch (error) {
+    console.error('Late payment refund failed:', error);
+    await prisma.order.update({ where: { id: orderId }, data: { paymentStatus: 'REFUND_REQUIRED' } });
+    return 'required';
+  }
+}
 
 const cookieOpts = {
   httpOnly: true,
@@ -30,6 +66,9 @@ const cookieOpts = {
 //   Returns: { razorpayOrderId, amount, currency, keyId, orderId }
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/checkout', async (req: Request, res: Response): Promise<void> => {
+  let checkoutOrderId: string | undefined;
+  let inventoryReservationSucceeded = false;
+  let reservedItems: { productId: string; variantId: string | null; quantity: number }[] = [];
   try {
     const {
       name, email, phone,
@@ -38,8 +77,23 @@ router.post('/checkout', async (req: Request, res: Response): Promise<void> => {
       paymentMethod,  // 'RAZORPAY' | 'COD'
     } = req.body;
 
-    if (!name || !email || !phone || !address || !items?.length) {
+    if (!name || !email || !phone || !address || !Array.isArray(items) || items.length === 0) {
       res.status(400).json({ message: 'name, email, phone, address, and items are required' });
+      return;
+    }
+
+    const method = paymentMethod || 'RAZORPAY';
+    if (method !== 'COD' && method !== 'RAZORPAY') {
+      res.status(400).json({ message: 'Unsupported payment method' });
+      return;
+    }
+    if (items.some((item: any) => !Number.isInteger(item.quantity) || item.quantity < 1)) {
+      res.status(400).json({ message: 'Each item quantity must be a positive whole number' });
+      return;
+    }
+
+    if (method === 'RAZORPAY' && !razorpay) {
+      res.status(503).json({ message: 'Online payments are not configured on this server' });
       return;
     }
 
@@ -76,7 +130,7 @@ router.post('/checkout', async (req: Request, res: Response): Promise<void> => {
     });
 
     // ── 3. Calculate total & create DB order ─────────────────────────
-    let totalAmount = 0;
+    let totalAmountPaise = 0;
     const orderItems = [];
 
     // We need a real DB product for the OrderItem relation.
@@ -85,8 +139,11 @@ router.post('/checkout', async (req: Request, res: Response): Promise<void> => {
     for (const item of items) {
       // Custom tee — no real product row; use client-provided price
       if (!item.productId || item.productId === 'custom-tee') {
-        const price = Number(item.price) || 999; // default ₹999 if not sent
-        totalAmount += price * item.quantity;
+        const pricePaise = Number.isFinite(Number(item.price)) && Number(item.price) > 0
+          ? rupeesToPaise(Number(item.price))
+          : 99900; // default ₹999 if not sent
+        const price = paiseToRupees(pricePaise);
+        totalAmountPaise += pricePaise * item.quantity;
         // We need a real productId for the FK — try to find a sentinel product
         const sentinel = await prisma.product.findFirst({ where: { slug: 'custom-tee' } });
         if (!sentinel) {
@@ -98,6 +155,7 @@ router.post('/checkout', async (req: Request, res: Response): Promise<void> => {
           variantId: null,
           quantity:  item.quantity,
           price,
+          pricePaise,
           size:      item.size || null,
         });
         continue;
@@ -110,33 +168,45 @@ router.post('/checkout', async (req: Request, res: Response): Promise<void> => {
         });
         return;
       }
-      const price = Number(product.price);
-      totalAmount += price * item.quantity;
+      const pricePaise = product.pricePaise;
+      const price = paiseToRupees(pricePaise);
+      totalAmountPaise += pricePaise * item.quantity;
       orderItems.push({
         productId: item.productId,
         variantId: item.variantId || null,
         quantity:  item.quantity,
         price,
+        pricePaise,
         size:      item.size || null,
       });
     }
 
-    const shipping = totalAmount >= 999 ? 0 : 99;
-    const grandTotal = totalAmount + shipping;
+    const shippingPaise = totalAmountPaise >= 99900 ? 0 : 9900;
+    const grandTotalPaise = totalAmountPaise + shippingPaise;
+    const grandTotal = paiseToRupees(grandTotalPaise);
 
     const order = await prisma.order.create({
       data: {
         userId:        user.id,
         addressId:     savedAddress.id,
         totalAmount:   grandTotal,
-        paymentMethod: paymentMethod || 'RAZORPAY',
+        totalAmountPaise: grandTotalPaise,
+        paymentMethod: method,
         items: { create: orderItems },
       },
       include: { items: true },
     });
+    checkoutOrderId = order.id;
+    reservedItems = order.items.map(item => ({
+      productId: item.productId,
+      variantId: item.variantId,
+      quantity: item.quantity,
+    }));
+    await reserveInventory(reservedItems);
+    inventoryReservationSucceeded = true;
 
     // ── 4. COD — skip Razorpay ────────────────────────────────────────
-    if (paymentMethod === 'COD') {
+    if (method === 'COD') {
       await prisma.order.update({ where: { id: order.id }, data: { status: 'CONFIRMED' } });
 
       // Send confirmation email (non-blocking — order already confirmed)
@@ -157,8 +227,8 @@ router.post('/checkout', async (req: Request, res: Response): Promise<void> => {
     }
 
     // ── 5. Create Razorpay order ─────────────────────────────────────
-    const rzpOrder = await razorpay.orders.create({
-      amount:   Math.round(grandTotal * 100),   // paise
+    const rzpOrder = await razorpay!.orders.create({
+      amount:   grandTotalPaise,
       currency: 'INR',
       receipt:  order.id,
       notes:    { name, email, phone },
@@ -179,24 +249,54 @@ router.post('/checkout', async (req: Request, res: Response): Promise<void> => {
     });
   } catch (err) {
     console.error('Checkout error:', err);
-    res.status(500).json({ message: 'Checkout failed', error: err });
+    if (checkoutOrderId) {
+      try {
+        if (inventoryReservationSucceeded) await restoreInventory(reservedItems);
+        await prisma.order.updateMany({
+          where: { id: checkoutOrderId, paymentStatus: 'PENDING', status: 'PENDING' },
+          data: { paymentStatus: 'FAILED', status: 'CANCELLED' },
+        });
+      } catch (cleanupError) {
+        console.error('Checkout cleanup failed:', cleanupError);
+      }
+    }
+    const outOfStock = err instanceof Error && /out of stock|quantity must/i.test(err.message);
+    res.status(outOfStock ? 409 : 500).json({
+      message: outOfStock ? err.message : 'Checkout failed',
+    });
   }
 });
 
 // POST /api/payment/create-order
 router.post('/create-order', authenticate, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { amount, orderId } = req.body; // amount in paise
+    if (!razorpay) {
+      res.status(503).json({ message: 'Online payments are not configured on this server' });
+      return;
+    }
+
+    const { orderId } = req.body;
+    if (typeof orderId !== 'string' || !orderId) {
+      res.status(400).json({ message: 'Order ID is required' });
+      return;
+    }
+    const order = await prisma.order.findFirst({
+      where: { id: orderId, userId: req.user!.id, paymentMethod: 'RAZORPAY' },
+    });
+    if (!order) {
+      res.status(404).json({ message: 'Order not found' });
+      return;
+    }
 
     const razorpayOrder = await razorpay.orders.create({
-      amount: Math.round(amount * 100), // convert to paise
+      amount: order.totalAmountPaise,
       currency: 'INR',
       receipt: orderId,
     });
 
     // Update order with razorpay order id
     await prisma.order.update({
-      where: { id: orderId },
+      where: { id: order.id },
       data: { razorpayOrderId: razorpayOrder.id },
     });
 
@@ -207,33 +307,76 @@ router.post('/create-order', authenticate, async (req: AuthRequest, res: Respons
       keyId: process.env.RAZORPAY_KEY_ID,
     });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to create payment order', error: err });
+    sendServerError(res, 'payment.routes', err, 'Failed to create payment order');
   }
 });
 
 // POST /api/payment/verify
 router.post('/verify', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, orderId } = req.body;
+    if (!razorpay || !process.env.RAZORPAY_KEY_SECRET) {
+      res.status(503).json({ message: 'Online payments are not configured on this server' });
+      return;
+    }
 
-    const expectedSignature = crypto
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, orderId } = req.body;
+    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !orderId) {
+      res.status(400).json({ message: 'Payment verification details are incomplete' });
+      return;
+    }
+
+    const expectedSignature = Buffer.from(crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET!)
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
-      .digest('hex');
+      .digest('hex'), 'hex');
+    const receivedSignature = Buffer.from(String(razorpay_signature), 'hex');
 
-    if (expectedSignature !== razorpay_signature) {
+    if (!/^[\da-f]{64}$/i.test(String(razorpay_signature)) ||
+        !crypto.timingSafeEqual(expectedSignature, receivedSignature)) {
       res.status(400).json({ message: 'Payment verification failed — signature mismatch' });
       return;
     }
 
-    await prisma.order.update({
-      where: { id: orderId },
-      data: {
-        paymentStatus:    'PAID',
-        status:           'CONFIRMED',
-        razorpayPayId:    razorpay_payment_id,
-      },
+    const order = await prisma.order.findFirst({
+      where: { id: String(orderId), razorpayOrderId: String(razorpay_order_id) },
     });
+    if (!order) {
+      res.status(404).json({ message: 'Payment does not match an order' });
+      return;
+    }
+
+    const payment = await razorpay.payments.fetch(String(razorpay_payment_id));
+    const expectedAmount = order.totalAmountPaise;
+    if (payment.order_id !== order.razorpayOrderId || payment.amount !== expectedAmount || payment.currency !== 'INR') {
+      res.status(400).json({ message: 'Payment details do not match this order' });
+      return;
+    }
+    if (payment.status !== 'captured') {
+      res.status(202).json({ message: 'Payment is still processing' });
+      return;
+    }
+
+    if (order.paymentStatus === 'FAILED' && order.status === 'CANCELLED') {
+      const refundState = await refundLateCapturedPayment(order.id, String(razorpay_payment_id), payment.amount);
+      res.status(refundState === 'required' ? 202 : 200).json({
+        message: refundState === 'refunded' ? 'Order expired; payment has been refunded' : 'Order expired; refund is being handled',
+      });
+      return;
+    }
+
+    const updated = await prisma.order.updateMany({
+      where: { id: order.id, razorpayOrderId: order.razorpayOrderId, paymentStatus: 'PENDING' },
+      data: { paymentStatus: 'PAID', status: 'CONFIRMED', razorpayPayId: String(razorpay_payment_id) },
+    });
+    if (updated.count === 0) {
+      const current = await prisma.order.findUnique({ where: { id: order.id } });
+      if (current?.paymentStatus === 'PAID' && current.razorpayPayId === String(razorpay_payment_id)) {
+        res.json({ message: 'Payment verified', paymentId: razorpay_payment_id });
+        return;
+      }
+      res.status(409).json({ message: 'Order is no longer awaiting this payment' });
+      return;
+    }
 
     // Send confirmation email (non-blocking)
     prisma.order.findUnique({
@@ -250,7 +393,7 @@ router.post('/verify', async (req: Request, res: Response): Promise<void> => {
 
     res.json({ message: 'Payment verified', paymentId: razorpay_payment_id });
   } catch (err) {
-    res.status(500).json({ message: 'Payment verification failed', error: err });
+    sendServerError(res, 'payment.routes', err, 'Payment verification failed');
   }
 });
 
@@ -304,13 +447,21 @@ router.post('/webhook', async (req: Request, res: Response): Promise<void> => {
     // Find the order by its Razorpay order ID and mark as PAID (idempotent)
     const order = await prisma.order.findFirst({ where: { razorpayOrderId } });
     if (order && order.paymentStatus !== 'PAID') {
+      const expectedAmount = order.totalAmountPaise;
+      if (paymentEntity.amount !== expectedAmount || paymentEntity.currency !== 'INR') {
+        res.status(400).json({ message: 'Captured payment amount does not match the order' });
+        return;
+      }
+
+      if (order.paymentStatus === 'FAILED' || order.status === 'CANCELLED') {
+        await refundLateCapturedPayment(order.id, razorpayPayId, paymentEntity.amount);
+        res.json({ received: true });
+        return;
+      }
+
       const updated = await prisma.order.updateMany({
-        where: { id: order.id, paymentStatus: { not: 'PAID' } },
-        data: {
-          paymentStatus: 'PAID',
-          status:        'CONFIRMED',
-          razorpayPayId,
-        },
+        where: { id: order.id, paymentStatus: 'PENDING', status: 'PENDING' },
+        data: { paymentStatus: 'PAID', status: 'CONFIRMED', razorpayPayId },
       });
 
       if (updated.count > 0) {
@@ -335,7 +486,7 @@ router.post('/webhook', async (req: Request, res: Response): Promise<void> => {
     res.json({ received: true });
   } catch (err) {
     console.error('Webhook error:', err);
-    res.status(500).json({ message: 'Webhook processing failed' });
+    sendServerError(res, 'payment.routes', err, 'Webhook processing failed');
   }
 });
 

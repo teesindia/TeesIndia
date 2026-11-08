@@ -1,3 +1,4 @@
+import { sendServerError } from '../lib/server-error';
 import { Router, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, AuthRequest } from '../middlewares/auth.middleware';
@@ -18,7 +19,7 @@ router.get('/', async (req: AuthRequest, res: Response): Promise<void> => {
     });
     res.json({ items: wishlist?.items || [] });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch wishlist', error: err });
+    sendServerError(res, 'wishlist.routes', err, 'Failed to fetch wishlist');
   }
 });
 
@@ -36,7 +37,7 @@ router.post('/add', async (req: AuthRequest, res: Response): Promise<void> => {
     });
     res.status(201).json({ item });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to add to wishlist', error: err });
+    sendServerError(res, 'wishlist.routes', err, 'Failed to add to wishlist');
   }
 });
 
@@ -50,7 +51,7 @@ router.delete('/remove', async (req: AuthRequest, res: Response): Promise<void> 
     }
     res.json({ message: 'Removed from wishlist' });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to remove from wishlist', error: err });
+    sendServerError(res, 'wishlist.routes', err, 'Failed to remove from wishlist');
   }
 });
 

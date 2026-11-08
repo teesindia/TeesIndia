@@ -1,8 +1,10 @@
+import { sendServerError } from '../lib/server-error';
+import { rupeesToPaise } from '../lib/money';
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, requireAdmin, AuthRequest } from '../middlewares/auth.middleware';
 import multer from 'multer';
-import { uploadToDrive, isDriveConfigured } from '../lib/drive';
+import { uploadObject, isObjectStorageConfigured, deleteObjectByUrl } from '../lib/objectStorage';
 
 // ─── On-demand ISR revalidation ──────────────────────────────────────────────────
 async function revalidateFrontend(scope: 'products' | 'settings' | 'all' = 'products'): Promise<void> {
@@ -42,17 +44,13 @@ function customizerPhraseFromTags(tags: string | null): string | undefined {
 
 /**
  * Resolves uploaded files to { url } objects.
- * - If Drive is configured → uploads each buffer to Drive, returns Drive URL
- * - Otherwise → returns base64 data URL embedded in DB (persistent)
+ * - If R2 is configured → uploads each buffer to R2 and returns a public URL
+ * - Otherwise → rejects uploads rather than bloating database rows with base64
  */
 async function resolveImageUrls(files: Express.Multer.File[]): Promise<{ url: string }[]> {
-  if (isDriveConfigured()) {
-    const results = await Promise.all(
-      files.map(f => uploadToDrive(f.buffer, f.originalname, f.mimetype))
-    );
-    return results.map(r => ({ url: r.webContentLink }));
-  }
-  return files.map(f => ({ url: `data:${f.mimetype};base64,${f.buffer.toString('base64')}` }));
+  if (!isObjectStorageConfigured()) throw new Error('R2 file storage is not configured');
+  const results = await Promise.all(files.map(f => uploadObject(f.buffer, f.originalname, f.mimetype)));
+  return results.map(result => ({ url: result.url }));
 }
 
 
@@ -115,7 +113,7 @@ router.get('/', async (req: Request, res: Response): Promise<void> => {
 
     res.json({ products: productsWithRating, total, page: parseInt(page as string), pages: Math.ceil(total / take) });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch products', error: err });
+    sendServerError(res, 'product.routes', err, 'Failed to fetch products');
   }
 });
 
@@ -149,7 +147,10 @@ router.get('/:slug', async (req: Request, res: Response): Promise<void> => {
       const requestedSlug = String(req.params.slug);
       // Fetch settings to check customizer slug and build dynamic product
       const settingsRow = await prisma.storeSettings.findUnique({ where: { id: 'singleton' } }).catch(() => null);
-      const sData: any = settingsRow?.data || {};
+      let sData: any = {};
+      try {
+        sData = typeof settingsRow?.data === 'string' ? JSON.parse(settingsRow.data) : settingsRow?.data || {};
+      } catch { sData = {}; }
       const customizerSlug = sData.customizerProductSlug || 'teesindia-qr-tshirt';
 
       if (requestedSlug === 'teesindia-qr-tshirt' || requestedSlug === customizerSlug) {
@@ -234,7 +235,7 @@ router.get('/:slug', async (req: Request, res: Response): Promise<void> => {
       },
     });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch product', error: err });
+    sendServerError(res, 'product.routes', err, 'Failed to fetch product');
   }
 });
 
@@ -305,7 +306,9 @@ router.post('/', authenticate, requireAdmin, upload.array('images', 10), async (
       data: {
         name, slug, description,
         price: parseFloat(price),
+        pricePaise: rupeesToPaise(Number(price)),
         comparePrice: resolvedComparePrice ? parseFloat(resolvedComparePrice) : null,
+        comparePricePaise: resolvedComparePrice ? rupeesToPaise(Number(resolvedComparePrice)) : null,
         categoryId: resolvedCategoryId,
         stock: parseInt(stock || '0'),
         isFeatured: isFeatured === 'true' || isFeatured === true,
@@ -335,7 +338,7 @@ router.post('/', authenticate, requireAdmin, upload.array('images', 10), async (
     // Purge product catalog cache on the CDN instantly
     revalidateFrontend('products').catch(() => {});
   } catch (err) {
-    res.status(500).json({ message: 'Failed to create product', error: err });
+    sendServerError(res, 'product.routes', err, 'Failed to create product');
   }
 });
 
@@ -362,8 +365,14 @@ router.put('/:id', authenticate, requireAdmin, upload.array('images', 10), async
     if (tags !== undefined) data.tags = typeof tags === 'string' ? tags : JSON.stringify(tags || []);
     if (material !== undefined) data.material = material;
     if (careInstr !== undefined) data.careInstr = careInstr;
-    if (price) data.price = parseFloat(price);
-    if (resolvedComparePrice !== undefined) data.comparePrice = resolvedComparePrice ? parseFloat(resolvedComparePrice) : null;
+    if (price !== undefined && price !== '') {
+      data.price = parseFloat(price);
+      data.pricePaise = rupeesToPaise(Number(price));
+    }
+    if (resolvedComparePrice !== undefined) {
+      data.comparePrice = resolvedComparePrice ? parseFloat(resolvedComparePrice) : null;
+      data.comparePricePaise = resolvedComparePrice ? rupeesToPaise(Number(resolvedComparePrice)) : null;
+    }
     if (stock !== undefined) data.stock = parseInt(stock);
     if (isFeatured !== undefined) data.isFeatured = isFeatured === 'true' || isFeatured === true;
     if (isActive !== undefined) {
@@ -378,9 +387,14 @@ router.put('/:id', authenticate, requireAdmin, upload.array('images', 10), async
     if (deleteImageIds) {
       const idsToDelete: string[] = typeof deleteImageIds === 'string' ? JSON.parse(deleteImageIds) : deleteImageIds;
       if (Array.isArray(idsToDelete) && idsToDelete.length) {
+        const imagesToDelete = await prisma.productImage.findMany({
+          where: { id: { in: idsToDelete }, productId: String(req.params.id) },
+          select: { url: true },
+        });
         await prisma.productImage.deleteMany({
           where: { id: { in: idsToDelete }, productId: String(req.params.id) },
         });
+        await Promise.all(imagesToDelete.map(image => deleteObjectByUrl(image.url).catch(err => console.warn('R2 image cleanup failed:', err))));
       }
     }
 
@@ -483,7 +497,7 @@ router.put('/:id', authenticate, requireAdmin, upload.array('images', 10), async
     // Purge product + individual product page from CDN cache
     revalidateFrontend('products').catch(() => {});
   } catch (err) {
-    res.status(500).json({ message: 'Failed to update product', error: err });
+    sendServerError(res, 'product.routes', err, 'Failed to update product');
   }
 });
 
@@ -520,7 +534,7 @@ router.delete('/:id', authenticate, requireAdmin, async (req: AuthRequest, res: 
     // Purge product catalog cache instantly
     revalidateFrontend('products').catch(() => {});
   } catch (err) {
-    res.status(500).json({ message: 'Failed to delete product', error: err });
+    sendServerError(res, 'product.routes', err, 'Failed to delete product');
   }
 });
 
@@ -535,7 +549,7 @@ router.post('/:id/reviews', authenticate, async (req: AuthRequest, res: Response
     });
     res.status(201).json({ review });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to add review', error: err });
+    sendServerError(res, 'product.routes', err, 'Failed to add review');
   }
 });
 

@@ -10,44 +10,27 @@
  *   SMTP_FROM   e.g. "TEESINDIA <yourname@gmail.com>"
  */
 
-import nodemailer, { Transporter } from 'nodemailer';
-import path from 'path';
-import dotenv from 'dotenv';
-
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
-
-let transporter: Transporter | null = null;
-
-function getTransporter(): Transporter {
-  const host = process.env.SMTP_HOST || 'smtp.gmail.com';
-  const port = parseInt(process.env.SMTP_PORT || '587');
-  const user = (process.env.SMTP_USER || '').trim();
-  const pass = (process.env.SMTP_PASS || '').replace(/\s+/g, '');
-
-  if (host === 'smtp.gmail.com') {
-    return nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user, pass },
-    });
-  }
-
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
-}
+const RESEND_API = 'https://api.resend.com';
 
 export async function verifySMTP(): Promise<{ success: boolean; message: string }> {
-  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    return { success: false, message: 'SMTP_USER or SMTP_PASS is missing in backend .env' };
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    return { success: false, message: 'RESEND_API_KEY is missing in the backend environment.' };
   }
   try {
-    await getTransporter().verify();
-    return { success: true, message: 'SMTP credentials verified successfully.' };
+    const response = await fetch(`${RESEND_API}/domains`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!response.ok) return { success: false, message: `Email API verification failed (${response.status}).` };
+    return { success: true, message: 'Email API credentials verified successfully.' };
   } catch (err: any) {
-    return { success: false, message: err?.message || 'Failed to verify SMTP credentials.' };
+    console.error('[mailer] Email API verification failed:', err);
+    return {
+      success: false,
+      message: process.env.NODE_ENV === 'development'
+        ? err?.message || 'Failed to verify email API credentials.'
+        : 'Email configuration could not be verified.',
+    };
   }
 }
 
@@ -56,20 +39,16 @@ export async function sendMail(opts: {
   subject: string;
   html:    string;
 }): Promise<void> {
-  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    console.warn('[mailer] SMTP credentials not set — skipping email to:', opts.to);
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM;
+  if (!apiKey || !from) {
+    console.warn('[mailer] RESEND_API_KEY or RESEND_FROM not set — skipping email to:', opts.to);
     return;
   }
-
-  try {
-    await getTransporter().sendMail({
-      from:    process.env.SMTP_FROM || process.env.SMTP_USER,
-      to:      opts.to,
-      subject: opts.subject,
-      html:    opts.html,
-    });
-    console.log('[mailer] Email sent to:', opts.to, '—', opts.subject);
-  } catch (err) {
-    console.error('[mailer] Failed to send email:', err);
-  }
+  const response = await fetch(`${RESEND_API}/emails`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to: [opts.to], subject: opts.subject, html: opts.html }),
+  });
+  if (!response.ok) throw new Error(`Email API request failed (${response.status}): ${await response.text()}`);
 }

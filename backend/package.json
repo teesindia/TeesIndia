@@ -4,18 +4,20 @@
   "description": "Teesindia E-Commerce Express Backend",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "dev": "wrangler dev",
     "build": "tsc",
-    "prestart": "prisma db push",
-    "start": "node dist/index.js",
-    "db:migrate": "prisma migrate dev",
-    "db:push": "prisma db push",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy",
+    "cf:typegen": "wrangler types",
+    "db:local": "wrangler d1 migrations apply teesindia --local",
+    "db:remote": "wrangler d1 migrations apply teesindia --remote",
     "db:generate": "prisma generate",
-    "db:seed": "ts-node src/seed.ts",
-    "db:studio": "prisma studio"
+    "db:migration:generate": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script --output migrations/0001_initial.sql",
+    "db:seed": "wrangler d1 execute teesindia --local --file=seed-d1.sql"
   },
   "dependencies": {
-    "@prisma/client": "^5.15.0",
+    "@prisma/adapter-d1": "^6.19.0",
+    "@prisma/client": "^6.19.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
@@ -24,24 +26,27 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.2.0",
     "@types/node": "^26.6.2",
-    "@types/nodemailer": "^8.0.2",
     "@types/uuid": "^10.0.0",
     "bcryptjs": "^2.4.3",
+    "body-parser": "^2.4.0",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "googleapis": "^181.0.0",
+    "express": "^5.3.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.4.0",
-    "nodemailer": "^10.0.10",
-    "prisma": "^5.15.0",
+    "prisma": "^6.19.0",
     "razorpay": "^2.9.4",
     "typescript": "^5.5.3",
     "uuid": "^11.1.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "ts-node-dev": "^2.0.0"
+    "@cloudflare/workers-types": "^5.20261101.1",
+    "wrangler": "^4.44.0"
+  },
+  "allowScripts": {
+    "prisma@6.19.3": true,
+    "@prisma/client@6.19.3": true,
+    "@prisma/engines@6.19.3": true
   }
 }

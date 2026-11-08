@@ -1,10 +1,7 @@
 import express from 'express';
+import bodyParser from 'body-parser';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import path from 'path';
-import dotenv from 'dotenv';
-
-dotenv.config(); // Reloaded with SMTP config
 
 import authRoutes from './routes/auth.routes';
 import productRoutes from './routes/product.routes';
@@ -19,9 +16,9 @@ import paymentRoutes from './routes/payment.routes';
 import collectionRoutes from './routes/collection.routes';
 import settingsRoutes from './routes/settings.routes';
 import { checkKillSwitch } from './middlewares/killSwitch.middleware';
+import { sendServerError } from './lib/server-error';
 
 const app = express();
-const PORT = process.env.PORT || 5000;
 
 // ─── Middleware ────────────────────────────────────────────
 // Parse configured client origins and auto-allow both www and non-www variants
@@ -72,18 +69,15 @@ app.use(cors({
   credentials: true,
 }));
 
-app.use(express.json({
+app.use(bodyParser.json({
   limit: '10mb',
   verify: (req, _res, buf) => {
     // Store raw body for Razorpay webhook signature verification
     (req as typeof req & { rawBody?: string }).rawBody = buf.toString('utf8');
   },
 }));
-app.use(express.urlencoded({ extended: true }));
+app.use(bodyParser.urlencoded({ extended: true }));
 app.use(cookieParser());
-
-// Serve uploaded files
-app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 // ─── Routes ───────────────────────────────────────────────
 // Kill-switch: checked on every /api request before hitting any route handler
@@ -114,12 +108,7 @@ app.use((_req, res) => {
 
 // Global error handler
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(err.stack);
-  res.status(500).json({ message: 'Internal server error', error: process.env.NODE_ENV === 'development' ? err.message : undefined });
-});
-
-app.listen(PORT, () => {
-  console.log(`🚀 Teesindia API running at ${PORT}`);
+  sendServerError(res, 'Unhandled request error', err, 'Internal server error');
 });
 
 export default app;

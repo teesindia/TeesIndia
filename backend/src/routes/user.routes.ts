@@ -1,3 +1,4 @@
+import { sendServerError } from '../lib/server-error';
 import { Router, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import prisma from '../lib/prisma';
@@ -15,7 +16,7 @@ router.get('/profile', async (req: AuthRequest, res: Response): Promise<void> =>
     });
     res.json({ user });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch profile', error: err });
+    sendServerError(res, 'user.routes', err, 'Failed to fetch profile');
   }
 });
 
@@ -30,7 +31,7 @@ router.put('/profile', async (req: AuthRequest, res: Response): Promise<void> =>
     });
     res.json({ user });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to update profile', error: err });
+    sendServerError(res, 'user.routes', err, 'Failed to update profile');
   }
 });
 
@@ -47,7 +48,7 @@ router.put('/password', async (req: AuthRequest, res: Response): Promise<void> =
     await prisma.user.update({ where: { id: req.user!.id }, data: { passwordHash } });
     res.json({ message: 'Password updated successfully' });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to update password', error: err });
+    sendServerError(res, 'user.routes', err, 'Failed to update password');
   }
 });
 
@@ -63,7 +64,7 @@ router.post('/addresses', async (req: AuthRequest, res: Response): Promise<void>
     });
     res.status(201).json({ address });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to add address', error: err });
+    sendServerError(res, 'user.routes', err, 'Failed to add address');
   }
 });
 
@@ -80,7 +81,7 @@ router.put('/addresses/:id', async (req: AuthRequest, res: Response): Promise<vo
     });
     res.json({ address });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to update address', error: err });
+    sendServerError(res, 'user.routes', err, 'Failed to update address');
   }
 });
 
@@ -90,7 +91,7 @@ router.delete('/addresses/:id', async (req: AuthRequest, res: Response): Promise
     await prisma.address.delete({ where: { id: String(req.params.id) } });
     res.json({ message: 'Address deleted' });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to delete address', error: err });
+    sendServerError(res, 'user.routes', err, 'Failed to delete address');
   }
 });
 

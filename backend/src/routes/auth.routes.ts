@@ -1,3 +1,4 @@
+import { sendServerError } from '../lib/server-error';
 import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
@@ -42,7 +43,7 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
 
     res.status(201).json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } });
   } catch (err) {
-    res.status(500).json({ message: 'Registration failed', error: err });
+    sendServerError(res, 'auth.routes', err, 'Registration failed');
   }
 });
 
@@ -62,7 +63,7 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 
     res.json({ user: { id: user.id, name: user.name, email: user.email, role: user.role } });
   } catch (err) {
-    res.status(500).json({ message: 'Login failed', error: err });
+    sendServerError(res, 'auth.routes', err, 'Login failed');
   }
 });
 
@@ -98,7 +99,7 @@ router.get('/me', authenticate, async (req: AuthRequest, res: Response): Promise
     if (!user) { res.status(404).json({ message: 'User not found' }); return; }
     res.json({ user });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch user', error: err });
+    sendServerError(res, 'auth.routes', err, 'Failed to fetch user');
   }
 });
 
@@ -141,7 +142,7 @@ router.post('/forgot-password', async (req: Request, res: Response): Promise<voi
     res.json({ message: 'If an account exists, a password reset link has been sent' });
   } catch (err) {
     console.error('Forgot password error:', err);
-    res.status(500).json({ message: 'Failed to process request' });
+    sendServerError(res, 'auth.routes', err, 'Failed to process request');
   }
 });
 
@@ -176,7 +177,7 @@ router.post('/reset-password', async (req: Request, res: Response): Promise<void
     res.json({ message: 'Password has been reset successfully' });
   } catch (err) {
     console.error('Reset password error:', err);
-    res.status(500).json({ message: 'Failed to reset password' });
+    sendServerError(res, 'auth.routes', err, 'Failed to reset password');
   }
 });
 

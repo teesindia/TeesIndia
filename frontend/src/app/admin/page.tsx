@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import AdminLayout from '@/components/admin/AdminLayout';
 import { adminApi } from '@/lib/api';
+import { useAuthStore } from '@/lib/store';
 import {
   ShoppingBag,
   Users,
@@ -58,6 +59,7 @@ interface RevenueDataPoint {
 }
 
 export default function AdminDashboardPage() {
+  const user = useAuthStore((state) => state.user);
   const [stats, setStats] = useState<Stats | null>(null);
   const [recentOrders, setRecentOrders] = useState<Order[]>([]);
   const [lowStock, setLowStock] = useState<LowStockProduct[]>([]);
@@ -83,6 +85,9 @@ export default function AdminDashboardPage() {
           if (typeof window !== 'undefined') window.location.href = '/login';
           return;
         }
+        // A regular customer can reach this page directly; show a useful
+        // access message instead of logging a noisy console error.
+        if (err?.response?.status === 403) return;
         // Other errors: log but let the dashboard show with empty state
         console.error('Failed to load admin stats:', err?.response?.data?.message || err?.message || err);
       } finally {
@@ -176,6 +181,22 @@ export default function AdminDashboardPage() {
 
   return (
     <AdminLayout title="Dashboard Overview" action={actionButtons}>
+      {user?.role !== 'ADMIN' && (
+        <div
+          role="alert"
+          style={{
+            marginBottom: '1.5rem',
+            padding: '1rem 1.25rem',
+            border: '1px solid #f3d28b',
+            borderRadius: '12px',
+            background: '#fff8e7',
+            color: '#7a4d00',
+          }}
+        >
+          Admin access is required to view dashboard data. Sign in with an admin account.
+          {' '}For local development, use <strong>admin@teesindia.com</strong> / <strong>admin123</strong> after running the database seed.
+        </div>
+      )}
       {/* Stat Cards Grid */}
       <div
         style={{

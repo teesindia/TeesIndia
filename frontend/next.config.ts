@@ -3,7 +3,7 @@ import type { NextConfig } from 'next';
 const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
-      { protocol: 'http', hostname: 'localhost', port: '5000', pathname: '/uploads/**' },
+      { protocol: 'http', hostname: 'localhost', port: '5001', pathname: '/uploads/**' },
       { protocol: 'https', hostname: 'images.unsplash.com' },
       { protocol: 'https', hostname: 'images.pexels.com' },
       { protocol: 'https', hostname: 'drive.google.com' },
@@ -82,7 +82,7 @@ const nextConfig: NextConfig = {
   },
 
   async rewrites() {
-    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+    const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
     const serverBase = apiBase.replace(/\/api\/?$/, '');
 
     return [
@@ -99,3 +99,5 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
+
+import('@opennextjs/cloudflare').then(m => m.initOpenNextCloudflareForDev());

@@ -3,38 +3,12 @@
 
 generator client {
   provider = "prisma-client-js"
+  engineType = "client"
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
-}
-
-enum Role {
-  CUSTOMER
-  ADMIN
-}
-
-enum OrderStatus {
-  PENDING
-  CONFIRMED
-  PROCESSING
-  SHIPPED
-  DELIVERED
-  CANCELLED
-  REFUNDED
-}
-
-enum PaymentStatus {
-  PENDING
-  PAID
-  FAILED
-  REFUNDED
-}
-
-enum PaymentMethod {
-  RAZORPAY
-  COD
 }
 
 model User {
@@ -42,7 +16,7 @@ model User {
   name         String
   email        String    @unique
   passwordHash String
-  role         Role      @default(CUSTOMER)
+  role         String    @default("CUSTOMER")
   phone        String?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -96,16 +70,20 @@ model Product {
   id           String   @id @default(uuid())
   name         String
   slug         String   @unique
-  description  String   @db.Text
-  price        Decimal  @db.Decimal(10, 2)
-  comparePrice Decimal? @db.Decimal(10, 2)
+  description  String
+  // Canonical currency values are integer paise. Legacy rupee fields remain
+  // mirrored temporarily for existing API clients and product display code.
+  price        Float
+  pricePaise   Int      @default(0)
+  comparePrice Float?
+  comparePricePaise Int?
   categoryId   String
   stock        Int      @default(0)
   isFeatured   Boolean  @default(false)
   isActive     Boolean  @default(true)
-  tags         String?  @db.Text // comma-separated
+  tags         String? // comma-separated
   material     String?
-  careInstr    String?  @db.Text
+  careInstr    String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -124,7 +102,7 @@ model Product {
 model ProductImage {
   id        String  @id @default(uuid())
   productId String
-  url       String  @db.LongText
+  url       String
   altText   String?
   position  Int     @default(0)
 
@@ -167,10 +145,13 @@ model Order {
   id              String        @id @default(uuid())
   userId          String
   addressId       String
-  totalAmount     Decimal       @db.Decimal(10, 2)
-  status          OrderStatus   @default(PENDING)
-  paymentStatus   PaymentStatus @default(PENDING)
-  paymentMethod   PaymentMethod
+  // Canonical order total in integer paise; totalAmount remains rupees for
+  // compatibility with existing frontend and email consumers.
+  totalAmount     Float
+  totalAmountPaise Int   @default(0)
+  status          String        @default("PENDING")
+  paymentStatus   String        @default("PENDING")
+  paymentMethod   String
   razorpayOrderId String?
   razorpayPayId   String?
   notes           String?
@@ -190,7 +171,9 @@ model OrderItem {
   productId String
   variantId String?
   quantity  Int
-  price     Decimal @db.Decimal(10, 2)
+  // Canonical item price in paise; price remains rupees for old consumers.
+  price     Float
+  pricePaise Int     @default(0)
   size      String?
 
   order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -226,7 +209,7 @@ model Review {
   productId String
   userId    String
   rating    Int
-  comment   String?  @db.Text
+  comment   String?
   createdAt DateTime @default(now())
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -240,14 +223,14 @@ model BlogPost {
   id          String    @id @default(uuid())
   title       String
   slug        String    @unique
-  excerpt     String?   @db.Text
-  content     String    @db.LongText
+  excerpt     String?
+  content     String
   coverImage  String?
   authorId    String
   isPublished Boolean   @default(false)
   publishedAt DateTime?
   category    String?
-  tags        String?   @db.Text
+  tags        String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
@@ -260,7 +243,7 @@ model Collection {
   id          String    @id @default(uuid())
   name        String
   slug        String    @unique
-  description String?   @db.Text
+  description String?
   heroImage   String?
   isActive    Boolean   @default(true)
   createdAt   DateTime  @default(now())
@@ -284,7 +267,7 @@ model CollectionProduct {
 
 model StoreSettings {
   id        String   @id @default("singleton")
-  data      Json
+  data      String
   updatedAt DateTime @updatedAt
 
   @@map("store_settings")

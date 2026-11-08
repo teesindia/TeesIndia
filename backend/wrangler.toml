@@ -1,0 +1,27 @@
+name = "teesindia-api"
+main = "src/worker.ts"
+compatibility_date = "2026-10-30"
+compatibility_flags = ["nodejs_compat"]
+
+[dev]
+port = 5001
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+RUNTIME = "cloudflare"
+NODE_ENV = "production"
+PORT = "5000"
+CLIENT_URL = "http://localhost:3000"
+R2_PUBLIC_URL = "https://pub-41061ae297504bfba337a077f5741d06.r2.dev"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "teesindia"
+database_id = "9a003522-9e88-42f5-bb86-00f070a27da1"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "ASSETS"
+bucket_name = "teesindia-assets"

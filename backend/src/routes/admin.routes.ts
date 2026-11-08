@@ -1,3 +1,4 @@
+import { sendServerError } from '../lib/server-error';
 import { Router, Request, Response } from 'express';
 import prisma from '../lib/prisma';
 import { authenticate, requireAdmin, AuthRequest } from '../middlewares/auth.middleware';
@@ -12,7 +13,7 @@ router.get('/stats', async (_req: Request, res: Response): Promise<void> => {
       prisma.order.count(),
       prisma.product.count({ where: { isActive: true } }),
       prisma.user.count({ where: { role: 'CUSTOMER' } }),
-      prisma.order.aggregate({ _sum: { totalAmount: true }, where: { paymentStatus: 'PAID' } }),
+      prisma.order.aggregate({ _sum: { totalAmountPaise: true }, where: { paymentStatus: 'PAID' } }),
       prisma.order.findMany({
         take: 5,
         orderBy: { createdAt: 'desc' },
@@ -30,13 +31,13 @@ router.get('/stats', async (_req: Request, res: Response): Promise<void> => {
         totalOrders,
         totalProducts,
         totalCustomers,
-        totalRevenue: totalRevenue._sum.totalAmount || 0,
+        totalRevenue: Number(totalRevenue._sum.totalAmountPaise || 0) / 100,
       },
       recentOrders,
       lowStockProducts,
     });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch stats', error: err });
+    sendServerError(res, 'admin.routes', err, 'Failed to fetch stats');
   }
 });
 
@@ -63,7 +64,7 @@ router.get('/customers', async (req: Request, res: Response): Promise<void> => {
     ]);
     res.json({ customers, total });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch customers', error: err });
+    sendServerError(res, 'admin.routes', err, 'Failed to fetch customers');
   }
 });
 
@@ -96,7 +97,7 @@ router.get('/customers/:id', async (req: Request, res: Response): Promise<void> 
     if (!customer) { res.status(404).json({ message: 'Customer not found' }); return; }
     res.json({ customer });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch customer details', error: err });
+    sendServerError(res, 'admin.routes', err, 'Failed to fetch customer details');
   }
 });
 
@@ -111,7 +112,7 @@ router.get('/revenue', async (_req: Request, res: Response): Promise<void> => {
         paymentStatus: 'PAID',
         createdAt: { gte: thirtyDaysAgo },
       },
-      select: { totalAmount: true, createdAt: true },
+      select: { totalAmountPaise: true, createdAt: true },
       orderBy: { createdAt: 'asc' },
     });
 
@@ -126,7 +127,7 @@ router.get('/revenue', async (_req: Request, res: Response): Promise<void> => {
     for (const order of orders) {
       const key = new Date(order.createdAt).toISOString().slice(0, 10);
       if (byDate[key] !== undefined) {
-        byDate[key] += Number(order.totalAmount);
+        byDate[key] += Number(order.totalAmountPaise) / 100;
       }
     }
 
@@ -138,7 +139,7 @@ router.get('/revenue', async (_req: Request, res: Response): Promise<void> => {
 
     res.json({ data });
   } catch (err) {
-    res.status(500).json({ message: 'Failed to fetch revenue', error: err });
+    sendServerError(res, 'admin.routes', err, 'Failed to fetch revenue');
   }
 });
 
