@@ -1,100 +1,45 @@
 # Teesindia E-Commerce — Project Setup Guide
 
 ## Prerequisites
-- Node.js v18+
-- MySQL 8.0+
+- Node.js 18+
 - npm
+- A Cloudflare account with Workers, D1, and R2 enabled
 
 ## Quick Start
 
-### 1. Setup Backend
+### Cloudflare setup (D1 + R2)
+
+The backend now targets Cloudflare Workers. D1 stores products, customers, orders, and other structured records; R2 stores uploaded image files. Create the resources from `backend/`:
 
 ```bash
 cd backend
+npm ci
+npx wrangler d1 create teesindia
+npx wrangler r2 bucket create teesindia-assets
+cp .dev.vars.example .dev.vars
+```
 
-# Copy env file and configure
-copy .env.example .env
-# Edit .env and set your MySQL credentials
+Copy the D1 database ID from Wrangler into `backend/wrangler.toml`. Set up a public R2 custom domain (or `r2.dev` URL) and set `R2_PUBLIC_URL` in `wrangler.toml` and `backend/.dev.vars`. Copy `.dev.vars.example` to `.dev.vars`, then set strong JWT secrets and any Razorpay, Resend, and revalidation credentials you use.
 
-# Install dependencies
-npm install
+Generate and apply the initial schema, then optionally load sample data:
 
-# Generate Prisma client
+```bash
 npm run db:generate
-
-# Run database migrations
-npm run db:migrate
-
-# Seed with sample data (optional)
+npm run db:migration:generate
+npm run db:local
 npm run db:seed
-
-# Start dev server
-npm run dev
+cd ../frontend && npm ci
+cd ..
+make dev
 ```
 
-Backend runs at: http://localhost:5000
+The API runs in Wrangler on port 5001; the Next.js frontend runs on port 3000. For a deployed API, use `npm run cf:deploy` from `backend/`, set Worker secrets with `wrangler secret put`, apply D1 migrations with `npm run db:remote`, and set `NEXT_PUBLIC_API_URL` in the frontend to the Worker API URL plus `/api`.
 
----
+**D1 note:** D1 is SQLite-based and the Prisma D1 adapter does not provide transactional guarantees. The current order and settings flows use Prisma nested writes/transactions, so review those flows carefully before relying on this setup for live purchases. The free tiers are suitable for development and early evaluation; check current Cloudflare quotas and pricing before launch.
 
-### 2. Setup Frontend
-
-```bash
-cd frontend
-
-# Dependencies already installed via create-next-app
-# Edit .env.local if needed
-
-# Start dev server
-npm run dev
-```
-
-Frontend runs at: http://localhost:3000
-
----
-
-## Environment Variables
-
-### Backend (`backend/.env`)
-```env
-DATABASE_URL="mysql://root:YOUR_PASSWORD@localhost:3306/teesindia"
-JWT_SECRET="your-super-secret-key"
-JWT_REFRESH_SECRET="your-refresh-secret-key"
-PORT=5000
-CLIENT_URL="http://localhost:3000"
-RAZORPAY_KEY_ID="rzp_test_xxxxx"       # From razorpay.com dashboard
-RAZORPAY_KEY_SECRET="your_secret"
-```
-
-### Frontend (`frontend/.env.local`)
-```env
-NEXT_PUBLIC_API_URL=http://localhost:5000/api
-NEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_test_xxxxx
-```
-
----
-
-## Database Setup (MySQL)
-
-1. Create database:
-```sql
-CREATE DATABASE teesindia;
-```
-
-2. Run migrations:
-```bash
-cd backend && npm run db:migrate
-```
-
-The backend's `prestart` hook runs `prisma db push` before the API starts. Configure the production start command to run `npm start` from `backend` and ensure its `DATABASE_URL` points to the production database. This applies Prisma schema changes automatically on each deploy; schema sync errors stop startup rather than running against an outdated database.
-
-3. Seed sample data:
-```bash
-cd backend && npm run db:seed
-```
-
-**Default Admin Login:**
+**Default development admin (after seeding):**
 - Email: `admin@teesindia.com`
-- Password: `admin123`
+- Password: `admin123` (change this immediately)
 
 ---
 
@@ -102,7 +47,7 @@ cd backend && npm run db:seed
 
 1. Sign up at [razorpay.com](https://razorpay.com)
 2. Go to Settings → API Keys → Generate Test Key
-3. Add `Key ID` and `Key Secret` to `backend/.env`
+3. Set `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` as Worker secrets
 4. Add `Key ID` to `frontend/.env.local` as `NEXT_PUBLIC_RAZORPAY_KEY_ID`
 
 ---
@@ -111,13 +56,15 @@ cd backend && npm run db:seed
 
 ```
 teesindia/
-├── backend/                 # Express API
+├── backend/                 # Express API on Cloudflare Workers
 │   ├── src/
-│   │   ├── index.ts         # Entry point
+│   │   ├── index.ts         # Express app
+│   │   ├── worker.ts        # Cloudflare Workers entry point
 │   │   ├── routes/          # API routes
 │   │   ├── middlewares/     # Auth middleware
 │   │   ├── lib/             # Prisma client
-│   │   └── seed.ts          # DB seed data
+│   │   └── lib/             # Prisma client, R2 uploads, email
+│   ├── migrations/          # D1 SQL migrations
 │   └── prisma/
 │       └── schema.prisma    # Database schema
 │
