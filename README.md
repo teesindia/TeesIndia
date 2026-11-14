@@ -1,4 +1,4 @@
-# TeesIndia
+# TeesIndia 
 
 TeesIndia is a full-stack e-commerce storefront for apparel and merchandise, designed to combine a polished shopping experience with a robust admin workflow. The project includes a storefront built with Next.js, a Cloudflare Worker-based API, Prisma data models, and Cloudflare D1/R2 infrastructure for storage and persistence.
 
