@@ -1,6 +1,6 @@
 -- Development seed data for Cloudflare D1. Change the admin password after first login.
 INSERT OR IGNORE INTO users (id, name, email, passwordHash, role, createdAt, updatedAt)
-VALUES ('a308db94-605d-4485-8e4d-2f445e509d85', 'Admin', 'admin@teesindia.com', '$2a$12$LSGXo699JJRnsB0MIUJFPOemRWwwV42D3fmWLCI63JY2bgPauxA1u', 'ADMIN', datetime('now'), datetime('now'));
+VALUES ('a308db94-605d-4485-8e4d-2f445e509d85', 'Admin', 'teesindiastore@gmail.com', '$2a$12$LSGXo699JJRnsB0MIUJFPOemRWwwV42D3fmWLCI63JY2bgPauxA1u', 'ADMIN', datetime('now'), datetime('now'));
 
 INSERT OR IGNORE INTO categories (id, name, slug, description, createdAt) VALUES
 ('aa86ae5a-d0d9-4003-a28d-895ecf654803', 'Men', 'men', 'Men''s clothing collection', datetime('now')),
